@@ -1,0 +1,12 @@
+poll_interval: 10
+
+servers:
+  - name: f1net
+    base_url: https://f1net.mprokazin.tech:47332/Y9k9FkLwEK7Umih/
+    username: xkS8TaAUjo
+    password: 4MI2lbv093
+
+  - name: f2net
+    base_url: https://f2net.mprokazin.tech:11264/DxOf0fG4u2UPWtN/
+    username: 21jOub65ju
+    password: 9GxmbTWchO
