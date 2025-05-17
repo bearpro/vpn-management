@@ -1,0 +1,12 @@
+poll_interval: 10
+
+servers:
+  - name: myserver1
+    base_url: https://myserver1.example.com:12345/my-api-path-1/
+    username: myusername1
+    password: mypassword1
+
+  - name: myserver2
+    base_url: https://myserver2.example.com:23456/my-api-path-2/
+    username: myusername2
+    password: mypassword2
