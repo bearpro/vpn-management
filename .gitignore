@@ -1,3 +1,4 @@
-data/*
-!data/.gitkeep
+**/data/*
+!**/data/.gitkeep
 .venv
+.env
