@@ -1,5 +1,6 @@
 FROM python:3.12-slim
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    SERVERS_CONFIG_PATH=/etc/collect-metrics/config.yaml
 WORKDIR /app
 
 # Install system dependencies (if any) and Python libraries
