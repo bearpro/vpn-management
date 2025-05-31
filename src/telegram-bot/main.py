@@ -10,11 +10,20 @@ import qrcode
 import requests
 
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
+    Update,
+    ReplyKeyboardMarkup,
+    InputMediaPhoto,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
-    ConversationHandler, CallbackQueryHandler, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    ConversationHandler,
+    CallbackQueryHandler,
+    filters
 )
 
 from config import load_app_config, ServerConnectionConfig
@@ -22,7 +31,10 @@ from config import load_app_config, ServerConnectionConfig
 from x3uiClient import X3UIClient
 
 # --- Configure logging ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # --- States for ConversationHandler ---
@@ -35,14 +47,16 @@ USERS_DB = 'data/users.json'
 # --- Load servers & sessions on startup ---
 CONFIG_PATH = os.getenv('CONFIG_PATH', 'data/config.yaml')
 
+
 def get_servers():
     config = load_app_config(CONFIG_PATH)
     return config.servers
 
+
 def get_sessions() -> Dict[str, X3UIClient]:
     servers = get_servers()
 
-    sessions = {}
+    sessions: Dict[str, X3UIClient] = {}
     for srv in servers:
         try:
             session = X3UIClient(srv)
@@ -50,8 +64,9 @@ def get_sessions() -> Dict[str, X3UIClient]:
             logger.info(f"Logged in to {srv.name}")
         except Exception as e:
             logger.error(f"Failed to login to {srv.name}: {e}")
-    
+
     return sessions
+
 
 # --- Helpers ---
 
@@ -61,9 +76,11 @@ def load_authenticated_users():
     with open(AUTH_DB, 'r') as f:
         return json.load(f)
 
+
 def save_authenticated_users(data):
     with open(AUTH_DB, 'w') as f:
         json.dump(data, f, indent=2)
+
 
 def save_users(db_path, users):
     with open(db_path, 'w') as f:
@@ -80,39 +97,38 @@ def load_users(db_path):
 def build_vless_url(session: X3UIClient, client_id, sub_id):
     """
     Fetch inbound details and construct a VLESS URL.
-    For the expected URL, we:
-      • Use the host from the base URL without its port.
-      • Use the port from the inbound details (defaulting to 443).
-      • Set the 'sid' parameter to an empty string.
-      • Use a custom tag from the server configuration.
+    Для ожидаемого URL:
+      • Берём host из base_url без порта.
+      • Используем порт из inbound (по умолчанию 443).
+      • Устанавливаем 'sid' в пустую строку.
+      • Используем custom tag из конфигурации.
     """
     server_config = session.config
     inbound = server_config.inbound_id
 
     # Get inbound details from the server
     obj = session.get_inbound(inbound)
-    
-    # Assume the inbound object contains a 'port' field (default to 443 if missing)
+
+    # Assume the inbound object содержит поле 'port' (по умолчанию 443)
     port = obj.get('port', 443)
-    
-    # Parse the base_url to extract just the hostname
+
+    # Извлекаем hostname из base_url
     parsed = urlparse(server_config.base_url)
     host = parsed.hostname
 
-    # find client email
+    # Находим email клиента по его client_id
     clients = json.loads(obj["settings"])["clients"]
     for client in clients:
-        if (client['id'] == client_id):
+        if client['id'] == client_id:
             break
     email = client.get('email', client_id)
-    
-    # Parse the streamSettings
+
+    # Парсим streamSettings
     ss = json.loads(obj['streamSettings'])
     rs = ss.get('realitySettings', {})
     settings = rs.get('settings', {})
 
-    # Set the URL query parameters.
-    # Note: We now set 'sid' to an empty string per the expected output.
+    # Параметры URL
     params = {
         'type': ss.get('network', 'tcp'),
         'security': ss.get('security', 'none'),
@@ -122,11 +138,13 @@ def build_vless_url(session: X3UIClient, client_id, sub_id):
         'sid': '',  # deliberately empty
         'spx': obj.get('spiderX', '/')
     }
-    qs = '&'.join(f"{k}={requests.utils.quote(str(v), safe='')}" for k, v in params.items())
+    qs = '&'.join(
+        f"{k}={requests.utils.quote(str(v), safe='')}"
+        for k, v in params.items()
+    )
 
-    # Use a custom tag if available; otherwise fall back to the server_config name.
+    # Используем remark или имя сервера в качестве тега
     tag = f"{obj.get('remark', server_config.name)}-{email}"
-    # tag = getattr(server_config, 'custom_tag', server_config.name)
     url = f"vless://{client_id}@{host}:{port}?{qs}#{tag}"
     return url
 
@@ -139,22 +157,41 @@ def generate_qr(url):
     bio.seek(0)
     return bio
 
+
+# Загружаем сохранённые данные аутентификации
 auth_data = load_authenticated_users()
 authenticated_users = set(auth_data.get("users", []))
 stored_secret = auth_data.get("secret", "")
 
-# --- Handlers ---
+
+# --- Функции-обработчики ---
+
+# Создаём основное меню (ReplyKeyboardMarkup), чтобы пользователю не пришлось помнить текстовые команды
+MAIN_MENU = ReplyKeyboardMarkup([
+    ["➕ Добавить пользователя", "👥 Список пользователей"],
+    ["🔄 Синхронизировать клиентов"]
+], resize_keyboard=True, one_time_keyboard=False)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! Please provide the secret to continue:")
+    """
+    Начало диалога. Спрашиваем секрет, чтобы пользователь ввёл его.
+    """
+    await update.message.reply_text(
+        "Добро пожаловать! Пожалуйста, введите секрет, чтобы продолжить:"
+    )
     return SECRET
 
 
 async def secret_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатываем введённый секрет. Если верно, аутентифицируем и показываем главное меню.
+    """
     global stored_secret, authenticated_users
 
     config = load_app_config(CONFIG_PATH)
 
+    # Если секрет в конфиге изменился, сбрасываем параллельно список ранее аутентифицированных
     if config.bot.secret != stored_secret:
         authenticated_users.clear()
         stored_secret = config.bot.secret
@@ -163,44 +200,95 @@ async def secret_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if text == config.bot.secret:
         authenticated_users.add(user_id)
-        
-        # Persist updated auth info
-        save_authenticated_users({"secret": stored_secret, "users": list(authenticated_users)})
-        
-        await update.message.reply_text("✅ Authenticated! You can now use /add_user or /list_users.")
+
+        # Сохраняем обновлённый список аутентифицированных
+        save_authenticated_users({
+            "secret": stored_secret,
+            "users": list(authenticated_users)
+        })
+
+        # Показываем главное меню
+        await update.message.reply_text(
+            "✅ Аутентификация успешна! Выберите действие из меню ниже:",
+            reply_markup=MAIN_MENU
+        )
         return ConversationHandler.END
     else:
-        await update.message.reply_text("❌ Incorrect secret. Try again:")
+        await update.message.reply_text(
+            "❌ Неверный секрет. Попробуйте ещё раз:"
+        )
         return SECRET
 
 
 async def add_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Шаг 1: начинаем диалог добавления пользователя, спрашиваем username.
+    """
     user_id = update.effective_user.id
     if user_id not in authenticated_users:
-        await update.message.reply_text("Please /start and enter the secret first.")
+        await update.message.reply_text(
+            "Пожалуйста, /start и введите секрет, чтобы продолжить."
+        )
         return ConversationHandler.END
-    await update.message.reply_text("Enter the system username for the new client:")
+
+    # Убираем ReplyKeyboard (необязательно), чтобы дальше можно было вводить свободный текст
+    await update.message.reply_text(
+        "Введите системное имя (username) для нового клиента:",
+        reply_markup=ReplyKeyboardMarkup([], resize_keyboard=True)
+    )
     return ADD_USERNAME
 
 
 async def add_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_user'] = {'username': update.message.text.strip()}
-    # ask for contact
-    kb = ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)]], one_time_keyboard=True)
-    await update.message.reply_text("Please share your Telegram contact or enter your Telegram ID/username:", reply_markup=kb)
+    """
+    Шаг 2: сохраняем введённый username, просим переслать контакт
+    """
+    context.user_data['new_user'] = {
+        'username': update.message.text.strip()
+    }
+    # Теперь просим админа переслать контакт целевого пользователя (или ввести текст),
+    # а также даём подсказку, что можно отменить ввод.
+    await update.message.reply_text(
+        "Пожалуйста, **перешлите контакт** пользователя (или напрямую введите его Telegram ID/username, например «@username» или «id:7370682957»).\n"
+        "Чтобы отменить операцию и вернуться в главное меню, отправьте «Отмена» или «/cancel».",
+        reply_markup=ReplyKeyboardMarkup([], resize_keyboard=True),
+        parse_mode="Markdown"
+    )
     return ADD_CONTACT
 
 
 async def add_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # extract contact info
-    if update.message.contact:
-        contact = update.message.contact.user_id
-    else:
-        contact = update.message.text.strip()
-    nu = context.user_data['new_user']
-    nu['telegram_contact'] = contact
+    """
+    Шаг 3: получаем пересланный контакт (или вводимый текст), формируем запись клиента,
+    рассылаем QR и URL по всем серверам.
 
-    # prepare client record
+    Также обрабатываем команду отмены (текст «Отмена» или «/cancel»).
+    """
+    text = update.message.text.strip() if update.message.text else ""
+
+    # Если админ ввёл «Отмена» или «/cancel» — завершаем диалог и возвращаем главное меню
+    if text.lower() in ('отмена', '/cancel'):
+        await update.message.reply_text(
+            "❗️Добавление пользователя отменено. Возврат в главное меню.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
+
+    # Если в сообщении есть contact — значит админ переслал контакт клиента
+    if update.message.contact:
+        user_id_peer = update.message.contact.user_id
+        # Сохраняем как строку формата "id:<peer_id>"
+        contact_str = f"id:{user_id_peer}"
+    else:
+        # Иначе берём чистый текст, который админ ввёл вручную
+        # Здесь ожидаем, что он уже в формате "@username" или "id:7370682957"
+        contact_str = text
+
+    # Сохраняем в user_data
+    nu = context.user_data['new_user']
+    nu['telegram_contact'] = contact_str
+
+    # Создаём записи для нового клиента
     client_id = str(uuid.uuid4())
     sub_id = str(uuid.uuid4())
     client = {
@@ -217,10 +305,8 @@ async def add_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     results = []
-    # call add_client_to_inbound on each server
     sessions = get_sessions()
-    for server_name in sessions:
-        session = sessions[server_name]
+    for server_name, session in sessions.items():
         try:
             inbound_id = session.config.inbound_id
             session.add_client_to_inbound(inbound_id, client)
@@ -229,92 +315,129 @@ async def add_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error adding client on {server_name}: {e}")
             results.append((server_name, False))
 
-    # send QR codes and URLs
+    # Отправляем QR-коды и URL
     for srv, ok in results:
         session = sessions[srv]
         if not ok:
-            await update.message.reply_text(f"⚠️ Failed on server {srv}")
+            await update.message.reply_text(f"⚠️ Не удалось добавить на сервер {srv}")
             continue
         url = build_vless_url(session, client_id, sub_id)
         qr = generate_qr(url)
-        await update.message.reply_photo(qr, caption=f"Here is your connection for {srv}:")
-        await update.message.reply_text(f"```plain\n{url}```", parse_mode="Markdown")
+        await update.message.reply_photo(qr, caption=f"Вот ваши данные подключения для {srv}:")
+        await update.message.reply_text(
+            f"```plain\n{url}```",
+            parse_mode="Markdown"
+        )
 
-    # save user to DB
+    # Сохраняем нового пользователя в USERS_DB
     users = load_users(USERS_DB)
     servers = get_servers()
-    nu['clients'] = {srv.name: {'id': client_id, 'subId': sub_id} for srv in servers}
-    nu['telegram_id'] = contact
+    nu['clients'] = {
+        srv.name: {'id': client_id, 'subId': sub_id}
+        for srv in servers
+    }
+    # Здесь nu['telegram_contact'] уже хранит строку "id:<peer_id>" или "@username"
+    nu['telegram_id'] = contact_str
     users.append(nu)
     save_users(USERS_DB, users)
 
-    await update.message.reply_text("✅ User added and connection details sent.")
+    # После окончания возвращаем главное меню
+    await update.message.reply_text(
+        "✅ Пользователь добавлен и данные подключения отправлены. Выберите следующее действие:",
+        reply_markup=MAIN_MENU
+    )
     return ConversationHandler.END
 
 
 async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатываем нажатие «👥 Список пользователей»: показываем inline-кнопки
+    с каждым username, чтобы можно было отправить им соединения заново.
+    """
     user_id = update.effective_user.id
     if user_id not in authenticated_users:
-        await update.message.reply_text("Please /start and enter the secret first.")
+        await update.message.reply_text(
+            "Пожалуйста, /start и введите секрет, чтобы продолжить."
+        )
         return
+
     users = load_users(USERS_DB)
     if not users:
-        await update.message.reply_text("No users found.")
+        await update.message.reply_text("Пользователей нет.", reply_markup=MAIN_MENU)
         return
-    buttons = [[InlineKeyboardButton(u['username'], callback_data=u['username'])] for u in users]
+
+    buttons = [
+        [InlineKeyboardButton(u['username'], callback_data=u['username'])]
+        for u in users
+    ]
     kb = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("Select a user to resend their connection details:", reply_markup=kb)
+    await update.message.reply_text(
+        "Выберите пользователя, чтобы повторно отправить данные подключения:",
+        reply_markup=kb
+    )
 
 
 async def user_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатываем выбор пользователя из списка (inline-кнопка).
+    Снова рассылаем QR и URL по всем серверам.
+    """
     query = update.callback_query
     await query.answer()
     username = query.data
+
     users = load_users(USERS_DB)
     user = next((u for u in users if u['username'] == username), None)
     if not user:
-        await query.edit_message_text("User not found.")
+        await query.edit_message_text("Пользователь не найден.", reply_markup=MAIN_MENU)
         return
-    
-    servers = get_sessions()
 
-    for server_name in servers:
-        srv = servers[server_name]
-        srv_cfg = srv.config
+    sessions = get_sessions()
 
+    for server_name, session in sessions.items():
+        srv_cfg = session.config
         info = user['clients'].get(srv_cfg.name)
         if not info:
             continue
         client_id = info['id']
         sub_id = info['subId']
-        url = build_vless_url(srv, client_id, sub_id)
+        url = build_vless_url(session, client_id, sub_id)
         qr = generate_qr(url)
-        await query.message.reply_photo(qr, caption=f"Connection for {srv_cfg.name}:")
-        await query.message.reply_text(f"```plain\n{url}```", parse_mode="Markdown")
+        await query.message.reply_photo(qr, caption=f"Данные подключения для {srv_cfg.name}:")
+        await query.message.reply_text(
+            f"```plain\n{url}```",
+            parse_mode="Markdown"
+        )
 
-    await query.edit_message_text(f"✅ Resent details for {username}.")
+    await query.edit_message_text(
+        f"✅ Данные подключения для `{username}` были повторно отправлены.",
+        parse_mode="Markdown",
+        reply_markup=MAIN_MENU
+    )
 
 
 async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    1. Загрузить со всех серверов inbound и извлечь из него список клиентов
-    2. Если на каком-то сервере клиент есть, а на другом нет - нужно добавить этого клиента
-       на тот сервер, где он отсутствует. Ключ – поле email (id могут отличаться).
-    3. Если клиент есть на сервере, но отсутствует в USERS_DB, то добавить его в USERS_DB
-    4. Если клиент есть в USERS_DB, но отсутствует на всех серверах, то удалить его из USERS_DB
+    Синхронизация клиентов между всеми серверами и обновление USERS_DB.
+    Логика:
+    1. Собрать списки клиентов со всех серверов.
+    2. Добавить отсутствующих клиентов на те сервера, где их нет.
+    3. Обновить USERS_DB (добавить новых, обновить существующих).
+    4. Удалить из USERS_DB тех, кто исчез со всех серверов.
     """
     user_id = update.effective_user.id
     if user_id not in authenticated_users:
-        await update.message.reply_text("Пожалуйста, /start и введите секрет, чтобы продолжить.")
+        await update.message.reply_text(
+            "Пожалуйста, /start и введите секрет, чтобы продолжить."
+        )
         return
 
     await update.message.reply_text("🔄 Начинаю синхронизацию клиентов…")
 
-    # 1. Собираем со всех серверов список клиентов
     sessions: Dict[str, X3UIClient] = get_sessions()
-    # clients_per_server: server_name -> [ {client_dict}, … ]
     clients_per_server: Dict[str, List[Dict]] = {}
 
+    # 1. Собираем клиентов со всех серверов
     for srv_name, session in sessions.items():
         try:
             inbound_id = session.config.inbound_id
@@ -326,41 +449,35 @@ async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Не удалось получить inbound с сервера {srv_name}: {e}")
             clients_per_server[srv_name] = []
 
-    # Построим вспомогательные структуры:
-    # email_to_servers: email -> set of серверов, где он есть
-    # email_to_example_client: email -> один из client_dict (для копирования при добавлении)
+    # Структуры для объединения по email
     email_to_servers: Dict[str, set] = {}
     email_to_example_client: Dict[str, Dict] = {}
-
     for srv_name, clients in clients_per_server.items():
         for client in clients:
             email = client.get("email")
             if not email:
                 continue
             email_to_servers.setdefault(email, set()).add(srv_name)
-            # сохраним первый встретившийся client_dict по каждому email
             if email not in email_to_example_client:
                 email_to_example_client[email] = client
 
     all_emails = set(email_to_servers.keys())
 
-    # 2. Пройти по каждому email и если он отсутствует на каком-то сервере – добавить
+    # 2. Добавляем клиентов на те сервера, где их нет
     for email in all_emails:
         present_on = email_to_servers[email]
         missing_on = set(sessions.keys()) - present_on
         if not missing_on:
             continue
 
-        # Берём шаблон client_dict с одного из серверов, где он уже есть
         template = email_to_example_client[email]
-
         for missing_srv in missing_on:
             session = sessions[missing_srv]
             inbound_id = session.config.inbound_id
-            # Копируем все поля клиента, но даём новый id и new subId
-            new_client = template.copy()
 
-            new_client["email"] = email  # оставляем точно такое же email
+            # Копируем поля клиента, но создаём новый id и subId
+            new_client = template.copy()
+            new_client["email"] = email
 
             try:
                 session.add_client_to_inbound(inbound_id, new_client)
@@ -369,13 +486,13 @@ async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Ошибка при добавлении клиента {email} на {missing_srv}: {e}")
                 await update.message.reply_text(f"⚠️ Не удалось добавить клиента `{email}` на `{missing_srv}`.")
 
-    # 3. и 4. Обновляем файл USERS_DB
+    # 3. Обновляем USERS_DB
     users_db_path = USERS_DB
-    existing_users = load_users(users_db_path)  # это список словарей-юзеров
+    existing_users = load_users(users_db_path)
     updated_users: List[Dict] = []
     existing_emails_in_db = set()
 
-    # Сначала найдём, какие email уже в USERS_DB
+    # 3.1. Сначала собираем email’ы из USERS_DB
     for user in existing_users:
         username = user.get("username")
         contact = user.get("telegram_contact", user.get("telegram_id", ""))
@@ -385,16 +502,13 @@ async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reconstructed_email = username
         existing_emails_in_db.add(reconstructed_email)
 
-    # 3.1: Если на сервере есть email, а в USERS_DB его нет → добавить нового пользователя
+    # 3.2. Если email есть на серверах, но нет в USERS_DB → добавляем нового пользователя
     for email in all_emails:
         if email not in existing_emails_in_db:
-            # разбор email: "{username}|{telegram_contact}" или просто "username"
             if "|" in email:
                 username_part, contact_part = email.split("|", 1)
             else:
                 username_part, contact_part = email, ""
-            # Собираем clients‐mapping: для каждого сервера, где есть этот email,
-            # запомним id и subId
             clients_map: Dict[str, Dict] = {}
             for srv_name, clients in clients_per_server.items():
                 for client in clients:
@@ -410,9 +524,9 @@ async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "clients": clients_map
             }
             updated_users.append(new_user_entry)
-            await update.message.reply_text(f"➕ Пользователь `{username_part}` (email `{email}`) добавлен в USERS_DB.")
+            await update.message.reply_text(f"➕ Пользователь `{username_part}` (email `{email}`) добавлен в базу.")
 
-    # 3.2 + 4: Обрабатываем всех уже существующих пользователей и либо обновляем, либо удаляем
+    # 3.3. Обрабатываем уже существующих пользователей: обновляем clients или удаляем, если клиента нет ни на одном сервере
     for user in existing_users:
         username = user.get("username")
         contact = user.get("telegram_contact", user.get("telegram_id", ""))
@@ -422,7 +536,7 @@ async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_email = username
 
         if user_email in all_emails:
-            # Обновляем mapping текущего пользователя:
+            # Обновляем clients_map
             clients_map: Dict[str, Dict] = {}
             for srv_name, clients in clients_per_server.items():
                 for client in clients:
@@ -431,52 +545,75 @@ async def sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "id": client.get("id"),
                             "subId": client.get("subId")
                         }
-            # Сохраняем обновлённый словарь (с новыми серверами, если клиент был добавлен)
             user["clients"] = clients_map
             updated_users.append(user)
         else:
-            # 4. Если в USERS_DB есть пользователь, но его email нет ни на одном сервере → удалить
-            await update.message.reply_text(f"🗑️ Пользователь `{username}` (email `{user_email}`) удалён из USERS_DB.")
+            # Клиент исчез со всех серверов → удаляем из базы
+            await update.message.reply_text(f"🗑️ Пользователь `{username}` удалён из базы.")
 
-    # Перезаписываем USERS_DB новым списком
+    # Сохраняем обновлённый USERS_DB
     save_users(users_db_path, updated_users)
 
-    await update.message.reply_text("✅ Синхронизация клиентов завершена.")
+    await update.message.reply_text(
+        "✅ Синхронизация клиентов завершена.",
+        reply_markup=MAIN_MENU
+    )
 
-    return
 
-# --- Set up the Application ---
+# Обработчик «пункта меню»: если пользователь нажал «➕ Добавить пользователя»
+async def menu_add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await add_user_cmd(update, context)
+
+
+# Обработчик «пункта меню»: «👥 Список пользователей»
+async def menu_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await list_users(update, context)
+
+
+# Обработчик «пункта меню»: «🔄 Синхронизировать клиентов»
+async def menu_sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await sync_clients(update, context)
+
 
 def main():
     cfg = load_app_config(CONFIG_PATH)
     app = ApplicationBuilder().token(cfg.bot.token).build()
 
-    # secret conversation
+    # ConversationHandler для ввода секрета
     secret_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, secret_handler)]},
+        states={
+            SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, secret_handler)]
+        },
         fallbacks=[]
     )
     app.add_handler(secret_conv)
 
-    # add_user conversation
+    # ConversationHandler для добавления пользователя
     add_conv = ConversationHandler(
-        entry_points=[CommandHandler('add_user', add_user_cmd)],
+        entry_points=[
+            # кроме кнопки/команды, можно по старому /add_user
+            CommandHandler('add_user', add_user_cmd),
+            MessageHandler(filters.Regex(r'^➕ Добавить пользователя$'), menu_add_user)
+        ],
         states={
             ADD_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_username)],
-            
+            # В ADD_CONTACT обрабатываем и contact, и текст (в том числе «Отмена»)
             ADD_CONTACT: [MessageHandler(filters.CONTACT | (filters.TEXT & ~filters.COMMAND), add_contact)],
         },
         fallbacks=[]
     )
     app.add_handler(add_conv)
 
-    # list users
+    # Обработчики для остальных пунктов меню
+    # Команда /list_users или кнопка «👥 Список пользователей»
     app.add_handler(CommandHandler('list_users', list_users))
+    app.add_handler(MessageHandler(filters.Regex(r'^👥 Список пользователей$'), menu_list_users))
     app.add_handler(CallbackQueryHandler(user_selected))
-    
-    # sync clients
+
+    # Команда /sync_clients или кнопка «🔄 Синхронизировать клиентов»
     app.add_handler(CommandHandler('sync_clients', sync_clients))
+    app.add_handler(MessageHandler(filters.Regex(r'^🔄 Синхронизировать клиентов$'), menu_sync_clients))
 
     logger.info("Bot is polling...")
     app.run_polling()
