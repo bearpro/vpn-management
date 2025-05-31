@@ -1,0 +1,8 @@
+services:
+  bot:
+    build: .
+    container_name: my_bot
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
