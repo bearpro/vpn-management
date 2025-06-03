@@ -38,11 +38,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- States for ConversationHandler ---
-SECRET, ADD_USERNAME, ADD_CONTACT = range(3)
+SECRET, ADD_USERNAME, ADD_CONTACT, BROADCAST_TPL = range(4)
 
 # --- Global storage ---
 AUTH_DB = 'data/auth_users.json'
 USERS_DB = 'data/users.json'
+BOT_USERS_DB = 'data/bot_users.json'
 
 # --- Load servers & sessions on startup ---
 CONFIG_PATH = os.getenv('CONFIG_PATH', 'data/config.yaml')
@@ -92,6 +93,18 @@ def load_users(db_path):
         return []
     with open(db_path, 'r') as f:
         return json.load(f)
+
+
+def load_bot_users():
+    if not os.path.exists(BOT_USERS_DB):
+        return {}
+    with open(BOT_USERS_DB, 'r') as f:
+        return json.load(f)
+
+
+def save_bot_users(data):
+    with open(BOT_USERS_DB, 'w') as f:
+        json.dump(data, f, indent=2)
 
 
 def build_vless_url(session: X3UIClient, client_id, sub_id):
@@ -169,7 +182,7 @@ stored_secret = auth_data.get("secret", "")
 # Создаём основное меню (ReplyKeyboardMarkup), чтобы пользователю не пришлось помнить текстовые команды
 MAIN_MENU = ReplyKeyboardMarkup([
     ["➕ Добавить пользователя", "👥 Список пользователей"],
-    ["🔄 Синхронизировать клиентов"]
+    ["🔄 Синхронизировать клиентов", "📢 Рассылка"]
 ], resize_keyboard=True, one_time_keyboard=False)
 
 
@@ -177,6 +190,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Начало диалога. Спрашиваем секрет, чтобы пользователь ввёл его.
     """
+    bot_users = load_bot_users()
+    uid = str(update.effective_user.id)
+    uname = f"@{update.effective_user.username}" if update.effective_user.username else ""
+    bot_users[uid] = uname
+    save_bot_users(bot_users)
+
     await update.message.reply_text(
         "Добро пожаловать! Пожалуйста, введите секрет, чтобы продолжить:"
     )
@@ -575,6 +594,69 @@ async def menu_sync_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await sync_clients(update, context)
 
 
+# --- Рассылка сообщений ---
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in authenticated_users:
+        await update.message.reply_text(
+            "Пожалуйста, /start и введите секрет, чтобы продолжить."
+        )
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "Введите шаблон рассылки. Используйте '----msg-br' для разделения сообщений."
+    )
+    return BROADCAST_TPL
+
+
+async def broadcast_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    templates = [t.strip() for t in update.message.text.split('----msg-br')]
+    await update.message.reply_text("📣 Начинаю рассылку...")
+
+    bot_users = load_bot_users()
+    users_db = load_users(USERS_DB)
+    sessions = get_sessions()
+
+    recipients: List[tuple] = []
+    for user in users_db:
+        contact = user.get("telegram_contact") or user.get("telegram_id")
+        if not contact:
+            continue
+        matched_id = None
+        if contact.startswith("id:"):
+            if contact.split(":", 1)[1] in bot_users:
+                matched_id = int(contact.split(":", 1)[1])
+        elif contact.startswith("@"):  # username
+            for uid, uname in bot_users.items():
+                if uname.lower() == contact.lower():
+                    matched_id = int(uid)
+                    break
+        if matched_id is not None:
+            recipients.append((user, matched_id))
+
+    for user, tg_id in recipients:
+        for msg in templates:
+            if msg:
+                try:
+                    await context.bot.send_message(tg_id, msg, parse_mode="Markdown")
+                except Exception as e:
+                    logger.error(f"Failed to send message to {tg_id}: {e}")
+        for srv_name, info in user.get("clients", {}).items():
+            session = sessions.get(srv_name)
+            if not session:
+                continue
+            try:
+                url = build_vless_url(session, info['id'], info['subId'])
+                qr = generate_qr(url)
+                await context.bot.send_photo(tg_id, qr, caption=f"Данные подключения для {srv_name}:")
+                await context.bot.send_message(tg_id, f"```plain\n{url}```", parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Failed to send connection to {tg_id}: {e}")
+
+    await update.message.reply_text("✅ Рассылка завершена.", reply_markup=MAIN_MENU)
+    return ConversationHandler.END
+
+
 def main():
     cfg = load_app_config(CONFIG_PATH)
     app = ApplicationBuilder().token(cfg.bot.token).build()
@@ -604,6 +686,19 @@ def main():
         fallbacks=[]
     )
     app.add_handler(add_conv)
+
+    # ConversationHandler для рассылки
+    broadcast_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler('broadcast', broadcast_cmd),
+            MessageHandler(filters.Regex(r'^📢 Рассылка$'), broadcast_cmd)
+        ],
+        states={
+            BROADCAST_TPL: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_template)],
+        },
+        fallbacks=[]
+    )
+    app.add_handler(broadcast_conv)
 
     # Обработчики для остальных пунктов меню
     # Команда /list_users или кнопка «👥 Список пользователей»
