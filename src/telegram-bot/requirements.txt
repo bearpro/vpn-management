@@ -1,5 +1,0 @@
-python-dotenv
-qrcode[pil]
-PyYAML
-python-telegram-bot
-requests

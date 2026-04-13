@@ -22,6 +22,7 @@
         default = pkgs.mkShell {
           packages = with pkgs; [
             python313
+            uv
             basedpyright
             ruff
             git

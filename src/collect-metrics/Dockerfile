@@ -1,22 +1,21 @@
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
-    SERVERS_CONFIG_PATH=/etc/collect-metrics/config.yaml
+    SERVERS_CONFIG_PATH=/etc/collect-metrics/config.yaml \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 WORKDIR /app
 
-# Install system dependencies (if any) and Python libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /uvx /bin/
 
-# Copy your monitoring script into the image
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
 COPY collect-metrics.py .
 
-# Expose the Prometheus metrics port
 EXPOSE 8000
 
-# Default command
-CMD ["python", "collect-metrics.py"]
+CMD ["uv", "run", "collect-metrics.py"]

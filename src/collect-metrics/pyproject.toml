@@ -1,0 +1,12 @@
+[project]
+name = "collect-metrics"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "prometheus-client",
+  "pyyaml",
+  "requests",
+]
+
+[tool.uv]
+package = false
