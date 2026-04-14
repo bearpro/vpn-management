@@ -108,11 +108,16 @@ async def send_messages(data_list: List[DataToSend]):
 
         for receiver in data_list:
             try:
-                for template in templates:
+                for template in templates[:-1]:
                     message = template.replace("{{url}}", receiver.url)
                     await client.send_message(receiver.tg_peer, message)
 
-                await client.send_file(receiver.tg_peer, receiver.qr_path)
+                last_message = templates[-1].replace("{{url}}", receiver.url)
+                await client.send_file(
+                    receiver.tg_peer,
+                    receiver.qr_path,
+                    caption=last_message,
+                )
                 print(f"Sent to {receiver.tg_peer}")
             except Exception as exc:
                 print(f"Failed to send to {receiver.tg_peer}: {exc}")
